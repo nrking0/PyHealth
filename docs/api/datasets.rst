@@ -446,6 +446,11 @@ PyHealth does not ship any data: you download each dataset from its source and p
      - `GitHub <https://github.com/XintianHan/Survival-MDN>`__
      - Yes
      - —
+   * - :doc:`SEER <datasets/pyhealth.datasets.SEERDataset>`
+     - Restricted / request
+     - `NCI SEER <https://seer.cancer.gov/data/access.html>`__
+     - No
+     - Synthetic fixture in ``test-resources/seer``
    * - :doc:`TCGA-PRAD <datasets/pyhealth.datasets.TCGAPRADDataset>`
      - Open
      - `GDC <https://portal.gdc.cancer.gov/projects/TCGA-PRAD>`__
@@ -514,6 +519,7 @@ Available Datasets
     datasets/pyhealth.datasets.EHRShotDataset
     datasets/pyhealth.datasets.Support2Dataset
     datasets/pyhealth.datasets.MetabricDataset
+    datasets/pyhealth.datasets.SEERDataset
     datasets/pyhealth.datasets.BMDHSDataset
     datasets/pyhealth.datasets.COVID19CXRDataset
     datasets/pyhealth.datasets.ChestXray14Dataset
