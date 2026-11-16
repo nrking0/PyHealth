@@ -213,13 +213,116 @@ class TestPrepareFromExport(TempDirTestCase):
         out = read_str(prepare_seer(self.tmp / "out", export_path=path))
         pd.testing.assert_frame_equal(out, read_str(FIXTURE / "seer.csv"))
 
-    def test_labels_instead_of_codes_raise(self):
-        table = read_str(labelled_export(self.tmp))
-        table["SEER cause-specific death classification"] = (
-            "Alive or dead of other cause"
+    def test_label_export(self):
+        """An export with SEER*Stat labels (as Nov 2025 SEER*Stat writes it)."""
+        table = pd.DataFrame(
+            {
+                "Patient ID": ["00000001", "00000001", "00000002", "00000003"],
+                "Record number recode": ["1", "2", "1", "1"],
+                "Sequence number": [
+                    "1st of 2 or more primaries",
+                    "2nd of 2 or more primaries",
+                    "One primary only",
+                    "One primary only",
+                ],
+                "Sex": ["Male", "Male", "Female", "Female"],
+                "Site recode ICD-O-3/WHO 2008": [
+                    "Lung and Bronchus",
+                    "Lung and Bronchus",
+                    "Lung and Bronchus",
+                    "Breast",
+                ],
+                "Year of diagnosis": ["2004", "2009", "2006", "2006"],
+                "Grade Recode (thru 2017)": [
+                    "Poorly differentiated; Grade III",
+                    "Unknown",
+                    "Well differentiated; Grade I",
+                    "Unknown",
+                ],
+                "CS tumor size (2004-2015)": ["25", "60", "", "18"],
+                "Age recode with <1 year olds and 90+": [
+                    "65-69 years",
+                    "70-74 years",
+                    "55-59 years",
+                    "50-54 years",
+                ],
+                "Survival months": ["62", "5", "12", "80"],
+                "SEER cause-specific death classification": [
+                    "Alive or dead of other cause",
+                    "Dead (attributable to this cancer dx)",
+                    "Alive or dead of other cause",
+                    "Dead (missing/unknown COD)",
+                ],
+                "SEER other cause of death classification": [
+                    "Dead (attributable to causes other than this cancer dx)",
+                    "Alive or dead due to cancer",
+                    "Alive or dead due to cancer",
+                    "Dead (missing/unknown COD)",
+                ],
+                "Vital status recode (study cutoff used)": [
+                    "Dead",
+                    "Dead",
+                    "Alive",
+                    "Dead",
+                ],
+                "Survival months flag": [
+                    (
+                        "Complete dates are available and there are more than 0 days "
+                        "of survival"
+                    ),
+                    (
+                        "Incomplete dates are available and there could be zero days "
+                        "of follow-up"
+                    ),
+                    "Complete dates are available and there are 0 days of survival",
+                    (
+                        "Incomplete dates are available and there cannot be zero days "
+                        "of follow-up"
+                    ),
+                ],
+                "Number of Intervals (Calculated)": ["60", "5", "12", "60"],
+            }
         )
+        table.to_csv(self.tmp / "export.csv", index=False, quoting=1)
+        out = read_str(
+            prepare_seer(
+                self.tmp / "out",
+                export_path=self.tmp / "export.csv",
+                site_recodes=LUNG,
+            )
+        ).set_index("case_id")
+        self.assertEqual(list(out.index), ["00000001_1", "00000001_2", "00000002_1"])
+        self.assertEqual(list(out.columns), list(SEER_COLUMNS[:1] + SEER_COLUMNS[2:]))
+        # Labels of coded columns become SEER codes.
+        self.assertEqual(list(out["sex"]), ["1", "1", "2"])
+        self.assertEqual(list(out["site_recode"]), ["22030"] * 3)
+        self.assertEqual(list(out["sequence_number"]), ["1", "2", "0"])
+        self.assertEqual(list(out["cause_of_death_class"]), ["0", "1", "0"])
+        self.assertEqual(list(out["other_cause_of_death_class"]), ["1", "0", "0"])
+        self.assertEqual(list(out["vital_status"]), ["4", "4", "1"])
+        self.assertEqual(list(out["survival_months_flag"]), ["1", "2", "0"])
+        # Other categorical columns keep their labels; numbers stay numbers.
+        self.assertEqual(
+            out.loc["00000001_1", "grade"], "Poorly differentiated; Grade III"
+        )
+        self.assertEqual(out.loc["00000002_1", "age_at_diagnosis"], "55-59 years")
+        self.assertEqual(list(out["cs_tumor_size"]), ["25", "60", ""])
+        self.assertEqual(list(out["survival_months"]), ["62", "5", "12"])
+        # Columns the export lacks are empty.
+        self.assertEqual(set(out["registry"]), {""})
+
+    def test_unknown_outcome_label_raises(self):
+        table = read_str(labelled_export(self.tmp))
+        table["SEER cause-specific death classification"] = "Something new"
         table.to_csv(self.tmp / "export.csv", index=False)
-        with self.assertRaisesRegex(ValueError, "codes"):
+        with self.assertRaisesRegex(ValueError, "SEER_LABEL_CODES"):
+            prepare_seer(self.tmp / "out", export_path=self.tmp / "export.csv")
+
+    def test_non_numeric_required_value_raises(self):
+        table = read_str(labelled_export(self.tmp))
+        table.loc[0, "Survival months"] = "unknown"
+        table.to_csv(self.tmp / "export.csv", index=False)
+        with self.assertRaisesRegex(ValueError, "survival_months"):
             prepare_seer(self.tmp / "out", export_path=self.tmp / "export.csv")
 
     def test_duplicate_case_raises(self):

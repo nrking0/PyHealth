@@ -49,8 +49,10 @@ SEER data cannot be downloaded or redistributed by PyHealth.
    for example lung and bronchus cancer diagnosed 2004-2009, with the
    variables in the column table below. The authors' SEER*Stat sessions
    describe their cohort selection.
-3. Export the listing as CSV or tab-separated text **with codes, not
-   labels**, and keep it outside version control.
+3. Export it from the results window with Export → Results as Text File:
+   comma delimiter, **Output variable names before data** checked, and
+   labels enclosed in quotes (SEER*Stat may offer only labels for case
+   listings). Keep the file outside version control.
 4. Build ``seer.csv`` with :func:`~pyhealth.datasets.seer.prepare_seer` or by
    passing ``export_path`` to ``SEERDataset``. A case list
    (``Patient ID``, ``Record number``) can be passed as ``cases_path`` to
@@ -66,12 +68,24 @@ compare cohort counts with the paper.
 Columns of ``seer.csv``
 -----------------------
 
-All values are SEER codes stored as integers, except ``patient_id`` and
-``case_id``. Blanks are empty. Special codes are kept as they are, for
-example ``999`` for unknown age and ``9999`` for unknown survival months, so
-that the task decides how to treat them. Columns that a source lacks (for
-example ``state_county`` in SEER Research exports) are written empty, with a
-warning.
+Numeric variables are stored as SEER codes. SEER*Stat exports categorical
+variables of case listings as labels: the labels of ``sex``,
+``site_recode``, ``sequence_number`` and the outcome columns are turned back
+into their SEER codes (see ``SEER_LABEL_CODES``), so survival labels are
+built from codes, and other categorical columns (for example ``grade``,
+``laterality``, ``marital_status``, ``race`` and the ``age_at_diagnosis``
+groups) keep their labels as text. Blanks are empty. Special codes are kept
+as they are, for example ``999`` for unknown age and ``9999`` for unknown
+survival months, so that the task decides how to treat them. Columns that a
+source lacks (for example ``state_county`` in SEER Research exports) are
+written empty, with a warning.
+
+When a newer release renames a variable, the SEER*Stat name used is listed
+next to the original. For the November 2025 release these are
+``Record number recode``, ``Age recode with <1 year olds and 90+`` (age
+groups instead of single years), ``Grade Recode (thru 2017)``, the
+``(2004-2015)`` versions of the CS variables and ``Derived AJCC Stage
+Group, 6th ed (2004-2015)``.
 
 .. list-table::
    :header-rows: 1
@@ -207,6 +221,34 @@ predictors. Identifiers are metadata, and outcome columns build labels and
 must never be used as predictors. Treatment variables (surgery, radiation)
 and other post-diagnosis variables are not loaded. The names above should
 be checked against the release actually used.
+
+Reproducing the paper's lung cohort
+-----------------------------------
+
+The authors' SEER*Stat session ``cohort/Lung_2004_2009_229011.ss`` was
+opened in SEER*Stat 9.1 and pointed at the current database, because its
+original database is no longer available. Its selection was kept: lung and
+bronchus (site recode), diagnosed 2004-2009, malignant behavior, known age,
+first primary only (sequence number 0 or 1), excluding death-certificate or
+autopsy-only cases and cases alive with no survival time.
+
+- **Database:** paper: Incidence - SEER 18 Regs Research Data + Hurricane
+  Katrina Impacted Louisiana Cases, Nov 2016 Sub (2000-2014). Here:
+  Incidence - SEER Research Data, 17 Registries, Nov 2025 Sub (2000-2023).
+- **Cases:** paper (session file name): 229,011. Here: 217,176 cases, one per
+  patient.
+- **12-month task:** 90,173 survived 12 months or more, 114,588 cancer deaths
+  before 12 months, 12,415 excluded (positive rate 0.44).
+- **60-month task:** 31,873 survived, 163,878 cancer deaths, 21,425 excluded
+  (positive rate 0.16).
+- **Not available in SEER Research case listings:** ``registry``,
+  ``state_county`` (SEER Research Plus only) and
+  ``first_malignant_primary``. A geographic ablation needs Research Plus.
+- **Age** is available only in five-year groups, not single years.
+- **Session warnings:** the expected survival table of the authors' session
+  is not the default for the new database (it only affects case exclusions)
+  and SEER now recommends other race groupings; both settings were kept to
+  stay close to the paper.
 
 Synthetic fixture
 -----------------

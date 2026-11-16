@@ -60,7 +60,13 @@ class SEERField:
 SEER_FIELDS: tuple[SEERField, ...] = (
     # Identifiers (metadata, never predictors).
     SEERField("patient_id", "PUBCSNUM", ("Patient ID",), "identifier", True),
-    SEERField("record_number", "REC_NO", ("Record number",), "identifier", True),
+    SEERField(
+        "record_number",
+        "REC_NO",
+        ("Record number", "Record number recode"),
+        "identifier",
+        True,
+    ),
     SEERField("sequence_number", "SEQ_NUM", ("Sequence number",), "identifier"),
     # Cohort selection.
     SEERField("year_of_diagnosis", "YEAR_DX", ("Year of diagnosis",), "cohort", True),
@@ -76,19 +82,44 @@ SEER_FIELDS: tuple[SEERField, ...] = (
     SEERField("state_county", "ST_CNTY", ("State-county",), "geography"),
     # Diagnosis-time attributes.
     SEERField("sex", "SEX", ("Sex",), "diagnosis"),
-    SEERField("age_at_diagnosis", "AGE_DX", ("Age at diagnosis",), "diagnosis"),
+    SEERField(
+        "age_at_diagnosis",
+        "AGE_DX",
+        ("Age at diagnosis", "Age recode with <1 year olds and 90+"),
+        "diagnosis",
+    ),
     SEERField("race", "RACE1V", ("Race recode (W, B, AI, API)",), "diagnosis"),
     SEERField(
         "marital_status", "MAR_STAT", ("Marital status at diagnosis",), "diagnosis"
     ),
     SEERField("histology", "HISTO3V", ("Histologic Type ICD-O-3",), "diagnosis"),
     SEERField("behavior", "BEHO3V", ("Behavior code ICD-O-3",), "diagnosis"),
-    SEERField("grade", "GRADE", ("Grade",), "diagnosis"),
+    SEERField("grade", "GRADE", ("Grade", "Grade Recode (thru 2017)"), "diagnosis"),
     SEERField("laterality", "LATERAL", ("Laterality",), "diagnosis"),
-    SEERField("cs_tumor_size", "CSTUMSIZ", ("CS tumor size (2004+)",), "diagnosis"),
-    SEERField("cs_extension", "CSEXTEN", ("CS extension (2004+)",), "diagnosis"),
-    SEERField("cs_lymph_nodes", "CSLYMPHN", ("CS lymph nodes (2004+)",), "diagnosis"),
-    SEERField("cs_mets_at_dx", "CSMETSDX", ("CS mets at dx (2004+)",), "diagnosis"),
+    SEERField(
+        "cs_tumor_size",
+        "CSTUMSIZ",
+        ("CS tumor size (2004+)", "CS tumor size (2004-2015)"),
+        "diagnosis",
+    ),
+    SEERField(
+        "cs_extension",
+        "CSEXTEN",
+        ("CS extension (2004+)", "CS extension (2004-2015)"),
+        "diagnosis",
+    ),
+    SEERField(
+        "cs_lymph_nodes",
+        "CSLYMPHN",
+        ("CS lymph nodes (2004+)", "CS lymph nodes (2004-2015)"),
+        "diagnosis",
+    ),
+    SEERField(
+        "cs_mets_at_dx",
+        "CSMETSDX",
+        ("CS mets at dx (2004+)", "CS mets at dx (2004-2015)"),
+        "diagnosis",
+    ),
     SEERField(
         "regional_nodes_positive",
         "EOD10_PN",
@@ -104,7 +135,10 @@ SEER_FIELDS: tuple[SEERField, ...] = (
     SEERField(
         "ajcc_stage_6th",
         "DAJCCSTG",
-        ("Derived AJCC Stage Group, 6th ed (2004+)",),
+        (
+            "Derived AJCC Stage Group, 6th ed (2004+)",
+            "Derived AJCC Stage Group, 6th ed (2004-2015)",
+        ),
         "diagnosis",
     ),
     SEERField(
@@ -161,6 +195,38 @@ SEER_OUTCOME_COLUMNS: tuple[str, ...] = tuple(
 LUNG_SITE_RECODE = 22030
 #: ``site_recode`` code for breast (SEER site recode ICD-O-3/WHO 2008).
 BREAST_SITE_RECODE = 26000
+
+#: SEER*Stat labels of coded columns, mapped back to their SEER codes, for
+#: case listings that SEER*Stat can only export as labels. Keys are
+#: lower-case with whitespace collapsed. Columns not listed here keep their
+#: labels as text. ``sequence_number`` labels are parsed separately.
+SEER_LABEL_CODES: dict[str, dict[str, int]] = {
+    "sex": {"male": 1, "female": 2},
+    "site_recode": {
+        "lung and bronchus": LUNG_SITE_RECODE,
+        "breast": BREAST_SITE_RECODE,
+    },
+    "cause_of_death_class": {
+        "alive or dead of other cause": 0,
+        "dead (attributable to this cancer dx)": 1,
+        "dead (missing/unknown cod)": 8,
+        "n/a not first tumor": 9,
+    },
+    "other_cause_of_death_class": {
+        "alive or dead due to cancer": 0,
+        "dead (attributable to causes other than this cancer dx)": 1,
+        "dead (missing/unknown cod)": 8,
+        "n/a not first tumor": 9,
+    },
+    "vital_status": {"alive": 1, "dead": 4},
+    "survival_months_flag": {
+        "complete dates are available and there are 0 days of survival": 0,
+        "complete dates are available and there are more than 0 days of survival": 1,
+        "incomplete dates are available and there could be zero days of follow-up": 2,
+        "incomplete dates are available and there cannot be zero days of follow-up": 3,
+    },
+}
+_SEQUENCE_LABEL = re.compile(r"^(\d+)(?:st|nd|rd|th) of \d+ or more primaries$")
 
 _CSV_NAME = "seer.csv"
 _SAS_LINE = re.compile(
@@ -327,26 +393,56 @@ def _read_cases(cases_path: str | Path) -> set[tuple[str, int]]:
     return set(zip(patients, records))
 
 
+def _label_to_code(label: str, name: str) -> int | None:
+    """Returns the SEER code of a SEER*Stat label, or None if it has none."""
+    key = _normalize(label)
+    if name == "sequence_number":
+        if key == "one primary only":
+            return 0
+        match = _SEQUENCE_LABEL.match(key)
+        return int(match.group(1)) if match else None
+    return SEER_LABEL_CODES.get(name, {}).get(key)
+
+
 def _to_codes(values: pd.Series, name: str, strict: bool) -> pd.Series:
-    """Converts a column of SEER codes to numbers, keeping blanks as missing.
+    """Converts a column of SEER codes or labels, keeping blanks as missing.
+
+    Labels of the columns in :data:`SEER_LABEL_CODES` (and of
+    ``sequence_number``) become their SEER codes. A column whose values are
+    then all numbers becomes numeric; any other column keeps its labels as
+    text.
 
     Args:
         values: The column, as strings.
         name: Canonical column name, for error messages.
-        strict: Raise if a non-blank value is not a number. Otherwise such
-            values become missing.
+        strict: Raise if a value is not a number after label mapping.
+
+    Raises:
+        ValueError: If a label of a mapped column is unknown, or ``strict``
+            and a value is not a number.
     """
     text = values.astype("string").str.strip().replace("", pd.NA)
     numbers = pd.to_numeric(text, errors="coerce")
-    bad = text.notna() & numbers.isna()
-    if bad.any():
-        examples = sorted(text[bad].unique())[:3]
+    labels = text.notna() & numbers.isna()
+    if labels.any() and (name in SEER_LABEL_CODES or name == "sequence_number"):
+        mapping = {
+            label: _label_to_code(label, name) for label in text[labels].unique()
+        }
+        unknown = sorted(label for label, code in mapping.items() if code is None)
+        if unknown:
+            raise ValueError(
+                f"{name} has labels with no known SEER code: {unknown[:5]}. "
+                "Add them to SEER_LABEL_CODES."
+            )
+        numbers = numbers.where(~labels, text.map(mapping))
+        numbers = pd.to_numeric(numbers)
+        labels = text.notna() & numbers.isna()
+    if labels.any():
         if strict:
             raise ValueError(
-                f"{name} has non-numeric values {examples}. Export SEER*Stat "
-                "case listings as codes, not labels."
+                f"{name} has non-numeric values {sorted(text[labels].unique())[:3]}"
             )
-        logger.warning("%s: %d non-numeric values set to missing", name, bad.sum())
+        return text
     if numbers.dropna().mod(1).eq(0).all():
         return numbers.astype("Int64")
     return numbers
@@ -366,9 +462,10 @@ def prepare_seer(
     Give exactly one source:
 
     - ``export_path``: a SEER*Stat case listing saved as CSV (or
-      tab-separated text), exported with codes rather than labels. Columns
-      are matched by SEER*Stat display name (e.g. ``"Survival months"``), SAS
-      name or canonical name; others are dropped.
+      tab-separated text), with a header row. Columns are matched by
+      SEER*Stat display name (e.g. ``"Survival months"``), SAS name or
+      canonical name; others are dropped. Exports with codes and exports
+      with labels both work (see below).
     - ``incidence_path`` and ``sas_path``: SEER ASCII incidence files (one
       ``.TXT``/``.TXT.gz`` file or a directory of them) and the SAS program
       that describes their layout, as in the November 2016 research release
@@ -379,9 +476,13 @@ def prepare_seer(
     exported from their SEER*Stat sessions), and/or with ``year_range`` and
     ``site_recodes``.
 
-    Values are stored as SEER codes. Blanks become empty cells; special
-    codes such as ``999`` (unknown age) or ``9999`` (unknown survival
-    months) are kept as they are, for the task to handle.
+    Numeric values are stored as SEER codes. SEER*Stat often exports
+    categorical variables only as labels: the labels of the identifier,
+    site, sex and outcome columns in :data:`SEER_LABEL_CODES` are turned
+    back into their SEER codes, so that labels can be built from codes, and
+    other categorical columns keep their labels as text. Blanks become empty
+    cells; special codes such as ``999`` (unknown age) or ``9999`` (unknown
+    survival months) are kept as they are, for the task to handle.
 
     Args:
         root: Directory to write ``seer.csv`` to.
@@ -511,9 +612,11 @@ class SEERDataset(BaseDataset):
     tumor; ``case_id`` (patient ID and record number) identifies the tumor.
     Each event holds diagnosis-time attributes (registry, age, sex, site,
     histology, stage and extent of disease, ...) and outcomes (survival
-    months, SEER cause-specific death classification). All values are SEER
+    months, SEER cause-specific death classification). Values are SEER
     codes, kept as given, including special codes such as ``9999`` for
-    unknown survival months. See :data:`SEER_FIELDS` for every column.
+    unknown survival months; categorical columns that SEER*Stat exported
+    only as labels keep their labels as text. Outcome, sex and site columns
+    are always codes. See :data:`SEER_FIELDS` for every column.
 
     If ``seer.csv`` is missing, it is built with :func:`prepare_seer` from
     ``export_path`` or from ``incidence_path`` and ``sas_path``.
@@ -532,9 +635,10 @@ class SEERDataset(BaseDataset):
           SEER Research Plus.
         - Export: in SEER*Stat, make a case listing of the cohort (e.g. lung
           cancer diagnosed 2004-2009) with the variables in
-          :data:`SEER_FIELDS`, and export it with codes rather than labels.
-          The November 2016 release used by the paper is no longer offered
-          in SEER*Stat; newer releases may rename variables.
+          :data:`SEER_FIELDS`, and export it as CSV with variable names
+          before the data. The November 2016 release used by the paper is
+          no longer offered in SEER*Stat; newer releases rename some
+          variables, which :data:`SEER_FIELDS` lists as alternatives.
         - ``root``: the folder that holds (or will hold) ``seer.csv``.
 
     Args:
